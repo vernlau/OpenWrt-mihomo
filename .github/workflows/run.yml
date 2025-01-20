@@ -1,4 +1,4 @@
-name: Build Packages
+name: Build Mihomo
 
 on:
   workflow_dispatch:
@@ -14,8 +14,6 @@ jobs:
           - x86_64
         branch:
           - SNAPSHOT
-          - openwrt-24.10
-          - openwrt-23.05
 
     steps:
       - name: Checkout
@@ -24,17 +22,18 @@ jobs:
       - name: Build
         uses: vernlau/gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
+          ARCH: ${{ matrix.arch }}
+          BRANCH: ${{ matrix.branch }}
           FEEDNAME: mihomo
           PACKAGES: luci-app-mihomo
-          NO_REFRESH_CHECK: true
           INDEX: 1
-          KEY_BUILD: ${{ secrets.KEY_BUILD }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           PUBLIC_KEY: ${{ secrets.PUBLIC_KEY }}
-          
+          NO_REFRESH_CHECK: "true"
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: mihomo_${{ matrix.arch }}-${{ matrix.branch }}
           path: bin/packages/${{ matrix.arch }}/mihomo
+                
