@@ -33,7 +33,9 @@ jobs:
           INDEX: 1
           KEY_BUILD: ${{ secrets.KEY_BUILD }}
           NO_REFRESH_CHECK: true
-
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.PUBLIC_KEY }}
+          
       - name: Compress
         run: |
           tar -c -z -f mihomo_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz -C bin/packages/${{ matrix.arch }}/mihomo .
@@ -69,9 +71,10 @@ jobs:
         run: |
           for file in feed_mihomo_*.tar.gz; do tar -x -z -f "$file"; done
       
-      - name: Key
+      - name: Keys
         run: |
           echo "${{ secrets.KEY_BUILD_PUB }}" > public/key-build.pub
+          echo "${{ secrets.PUBLIC_KEY }}" > public/public-key.pem
 
       - name: Feed
         uses: peaceiris/actions-gh-pages@v4
