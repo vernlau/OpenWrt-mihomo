@@ -22,37 +22,20 @@ Transparent Proxy with Mihomo on OpenWrt.
 
 ### A. Install From Feed (Recommended)
 
-1. Add Feed
-
 ```shell
-# only needs to be run once
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/feed.sh | ash
-```
-
-2. Install
-
-```shell
-# you can install from shell or `Software` menu in LuCI
-# for opkg
-opkg install mihomo
-opkg install luci-app-mihomo
-opkg install luci-i18n-mihomo-zh-cn
-# for apk
-apk add --allow-untrusted mihomo
-apk add --allow-untrusted luci-app-mihomo
-apk add --allow-untrusted luci-i18n-mihomo-zh-cn
+curl -s -L https://github.com/vernlau/OpenWrt-mihomo/raw/refs/heads/main/feed.sh | ash
 ```
 
 ### B. Install From Release
 
 ```shell
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/install.sh | ash
+curl -s -L https://github.com/vernlau/OpenWrt-mihomo/raw/refs/heads/main/install.sh | ash
 ```
 
 ## Uninstall & Reset
 
 ```shell
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/uninstall.sh | ash
+curl -s -L https://github.com/vernlau/OpenWrt-mihomo/raw/refs/heads/main/uninstall.sh | ash
 ```
 
 ## How To Use

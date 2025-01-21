@@ -1,105 +1,95 @@
-name: Release Packages
+name: Update Mihomo Version
 
 on:
+  schedule:
+    - cron: "0 0 * * *"
   workflow_dispatch:
-  push:
-    tags:
-      - v*
 
 jobs:
-  release:
-    name: ${{ matrix.arch }}-${{ matrix.branch }} release
+  get_current_info:
     runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_vfpv3-d16
-          - arm_cortex-a9_neon
-          - arm_cortex-a15_neon-vfpv4
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_cortex-a76
-          - aarch64_generic
-          - mips_24kc
-          - mips_4kec
-          - mips_mips32
-          - mipsel_24kc
-          - mipsel_24kc_24kf
-          - mipsel_74kc
-          - mipsel_mips32
-          - mips64_octeonplus
-          - i386_pentium4
-          - x86_64
-        branch:
-          - openwrt-23.05
-          - openwrt-24.10
-          - SNAPSHOT
-        exclude:
-          - arch: aarch64_cortex-a76
-            branch: openwrt-23.05
+    outputs:
+      pkg_source_date: ${{ steps.get_current_info.outputs.pkg_source_date }}
+      pkg_source_version: ${{ steps.get_current_info.outputs.pkg_source_version }}
+      pkg_mirror_hash: ${{ steps.get_current_info.outputs.pkg_mirror_hash }}
+      pkg_build_version: ${{ steps.get_current_info.outputs.pkg_build_version }}
 
     steps:
-      - name: Checkout
+      - id: checkout
+        name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: vernlau/OpenWrt-mihomo
+          ref: main
+          path: OpenWrt-mihomo
 
-      - name: Build
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
-          FEEDNAME: mihomo
-          PACKAGES: luci-app-mihomo
-          INDEX: 1
-          KEY_BUILD: ${{ secrets.KEY_BUILD }}
-          NO_REFRESH_CHECK: true
-
-      - name: Compress
+      - id: get_current_info
+        name: Get Current Info
         run: |
-          tar -c -z -f mihomo_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz -C bin/packages/${{ matrix.arch }}/mihomo .
-          mkdir -p public/${{ matrix.branch }}/${{ matrix.arch }}
-          mv bin/packages/${{ matrix.arch }}/mihomo public/${{ matrix.branch }}/${{ matrix.arch }}
-          tar -c -z -f feed_mihomo_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz public/${{ matrix.branch }}/${{ matrix.arch }}
+          echo "pkg_source_date=$(grep "PKG_SOURCE_DATE:=" OpenWrt-mihomo/mihomo/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_source_version=$(grep "PKG_SOURCE_VERSION:=" OpenWrt-mihomo/mihomo/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_mirror_hash=$(grep "PKG_MIRROR_HASH:=" OpenWrt-mihomo/mihomo/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_build_version=$(grep "PKG_BUILD_VERSION:=" OpenWrt-mihomo/mihomo/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+  get_lastest_info:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_date: ${{ steps.get_lastest_info.outputs.commit_date }}
+      commit_sha: ${{ steps.get_lastest_info.outputs.commit_sha }}
+      short_commit_sha: ${{ steps.get_lastest_info.outputs.short_commit_sha }}
+      checksum: ${{ steps.get_lastest_info.outputs.checksum }}
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
         with:
-          files: |
-            mihomo_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz
+          repository: 'MetaCubeX/mihomo'
+          ref: 'Alpha'
+          path: 'mihomo'
 
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: feed_mihomo_${{ matrix.arch }}-${{ matrix.branch }}
-          path: feed_mihomo_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz
+      - id: get_lastest_info
+        name: Get Latest Info
+        run: |
+          echo "commit_date=$(git -C mihomo log -n 1 --format=%cs)" >> $GITHUB_OUTPUT
+          echo "commit_sha=$(git -C mihomo rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "short_commit_sha=$(git -C mihomo rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          git -C mihomo config tar.xz.command "xz -c"
+          git -C mihomo archive --output=mihomo.tar.xz HEAD
+          echo "checksum=$(sha256sum mihomo/mihomo.tar.xz | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
 
-  feed:
-    needs: release
-    name: feed
+  update:
+    needs:
+      - get_current_info
+      - get_lastest_info
+    if: ${{ needs.get_current_info.outputs.pkg_source_version != needs.get_lastest_info.outputs.commit_sha }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download
-        uses: actions/download-artifact@v4
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
         with:
-          pattern: feed_mihomo_*
-          merge-multiple: true
-      
-      - name: Uncompress
-        run: |
-          for file in feed_mihomo_*.tar.gz; do tar -x -z -f "$file"; done
-      
-      - name: Key
-        run: |
-          echo "${{ secrets.KEY_BUILD_PUB }}" > public/key-build.pub
+          repository: vernlau/OpenWrt-mihomo
+          ref: main
+          path: OpenWrt-mihomo
 
-      - name: Feed
-        uses: peaceiris/actions-gh-pages@v4
+      - id: update
+        name: Update
+        run: |
+          sed -i "s/PKG_RELEASE:=.*/PKG_RELEASE:=1/" OpenWrt-mihomo/mihomo/Makefile
+          sed -i "s/PKG_SOURCE_DATE:=.*/PKG_SOURCE_DATE:=${{ needs.get_lastest_info.outputs.commit_date }}/" OpenWrt-mihomo/mihomo/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ needs.get_lastest_info.outputs.commit_sha }}/" OpenWrt-mihomo/mihomo/Makefile
+          sed -i "s/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${{ needs.get_lastest_info.outputs.checksum }}/" OpenWrt-mihomo/mihomo/Makefile
+          sed -i "s/PKG_BUILD_VERSION:=.*/PKG_BUILD_VERSION:=alpha-${{ needs.get_lastest_info.outputs.short_commit_sha }}/" OpenWrt-mihomo/mihomo/Makefile
+
+      - id: pr
+        name: Pull Request
+        uses: peter-evans/create-pull-request@v6
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          force_orphan: true
-          commit_message: Update Feed
+          path: OpenWrt-mihomo
+          branch: dependabot
+          commit-message: Update Mihomo Version
+          title: Update Mihomo Version
+          body: |
+            [Changelog](https://github.com/metacubex/mihomo/compare/${{ needs.get_current_info.outputs.pkg_source_version }}...${{  needs.get_lastest_info.outputs.commit_sha }})
