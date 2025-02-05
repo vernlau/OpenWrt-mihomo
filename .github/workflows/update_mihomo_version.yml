@@ -93,3 +93,6 @@ jobs:
           title: Update Mihomo Version
           body: |
             [Changelog](https://github.com/metacubex/mihomo/compare/${{ needs.get_current_info.outputs.pkg_source_version }}...${{  needs.get_lastest_info.outputs.commit_sha }})
+          labels: automated pr
+          delete-branch: true
+          auto-merge-method: merge
