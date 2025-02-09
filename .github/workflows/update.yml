@@ -1,9 +1,9 @@
-name: Update Mihomo Version
+name: Update Packages
 
 on:
-  schedule:
-    - cron: "0 0 * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "0 22,1,4,7,10,13 * * *"
 
 jobs:
   get_current_info:
@@ -83,14 +83,117 @@ jobs:
           sed -i "s/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${{ needs.get_lastest_info.outputs.checksum }}/" openwrt-nikki/nikki/Makefile
           sed -i "s/PKG_BUILD_VERSION:=.*/PKG_BUILD_VERSION:=alpha-${{ needs.get_lastest_info.outputs.short_commit_sha }}/" openwrt-nikki/nikki/Makefile
 
-      - id: pr
-        name: Pull Request
-        uses: peter-evans/create-pull-request@v6
+      - id: commit
+        name: Commit
+        run: |
+          cd openwrt-nikki
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add nikki/Makefile
+          git commit -m "Update core"
+          git push origin main
+
+  build:
+    needs: update
+    if: ${{ needs.update.result == 'success' }}
+    name: ${{ matrix.arch }}-${{ matrix.branch }} build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86_64
+        branch:
+          - SNAPSHOT
+          - openwrt-24.10
+
+    steps:
+      - name: Set timezone
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date
+
+      - name: System info
+        run: |
+          lscpu | grep -E '^Architecture|^CPU\(s\):|^Model name'
+          uname -sr
+          lsb_release -a
+          free -h
+          
+      - name: Checkout
+        uses: actions/checkout@main
         with:
+          repository: apoiston/openwrt-nikki
+          ref: main
           path: openwrt-nikki
-          branch: dependabot
-          commit-message: Update Mihomo Version
-          title: Update Mihomo Version
-          body: |
-            [Changelog](https://github.com/metacubex/mihomo/compare/${{ needs.get_current_info.outputs.pkg_source_version }}...${{  needs.get_lastest_info.outputs.commit_sha }})
-            
+          fetch-depth: 1
+
+      - name: Show info
+        run: |
+          ls -l $GITHUB_WORKSPACE
+          grep -o 'PKG_BUILD_VERSION:.*' openwrt-nikki/nikki/Makefile | cut -d '=' -f 2
+
+      - name: Build
+        uses: apoiston/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
+          FEEDNAME: nikki
+          PACKAGES: luci-app-nikki
+          INDEX: 1
+          NO_REFRESH_CHECK: true
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.PUBLIC_KEY }}
+          
+      - name: Compress
+        run: |
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz -C bin/packages/${{ matrix.arch }}/nikki . 
+          mkdir -p public/${{ matrix.branch }}/${{ matrix.arch }}
+          mv bin/packages/${{ matrix.arch }}/nikki public/${{ matrix.branch }}/${{ matrix.arch }}
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz public/${{ matrix.branch }}/${{ matrix.arch }}
+
+      - name: Upload
+        uses: actions/upload-artifact@main
+        with:
+          name: nikki_${{ matrix.arch }}-${{ matrix.branch }}
+          path: nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz
+
+  feed:
+    needs: build
+    name: feed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download
+        uses: actions/download-artifact@main
+        with:
+          pattern: nikki_*
+          merge-multiple: true
+      
+      - name: Uncompress
+        run: |
+          for file in nikki_*.tar.gz; do tar -x -z -f "$file"; done
+
+      - name: Keys
+        run: |
+          echo "${{ secrets.KEY_BUILD_PUB }}" > public/key-build.pub
+          echo "${{ secrets.PUBLIC_KEY }}" > public/public-key.pem
+
+      - name: index
+        uses: apoiston/actions@index
+
+      - name: Feed
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          force_orphan: true
+          commit_message: Update Feed
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 2
