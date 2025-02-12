@@ -2,58 +2,136 @@ name: Build Packages
 
 on:
   workflow_dispatch:
+  # workflow_run:
+  #   workflows: ["Update Packages"]
+  #   types:
+  #     - success
 
 jobs:
   build:
     name: ${{ matrix.arch }}-${{ matrix.branch }} build
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         arch:
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_vfpv3-d16
-          - arm_cortex-a9_neon
-          - arm_cortex-a15_neon-vfpv4
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_cortex-a76
-          - aarch64_generic
-          - mips_24kc
-          - mips_4kec
-          - mips_mips32
-          - mipsel_24kc
-          - mipsel_24kc_24kf
-          - mipsel_74kc
-          - mipsel_mips32
-          - mips64_octeonplus
-          - i386_pentium4
           - x86_64
         branch:
-          - openwrt-23.05
-          - openwrt-24.10
           - SNAPSHOT
-        exclude:
-          - arch: aarch64_cortex-a76
-            branch: openwrt-23.05
+          - openwrt-24.10
 
     steps:
+      - name: Set timezone
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date
+
+      - name: System info
+        run: |
+          lscpu | grep -E '^Architecture|^CPU\(s\):|^Model name'
+          uname -sr
+          lsb_release -a
+          free -h
+          
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+          fetch-depth: 1
+
+      - name: Show info
+        run: |
+          ls -l $GITHUB_WORKSPACE
+          grep -o 'PKG_BUILD_VERSION:.*' openwrt-nikki/nikki/Makefile | cut -d '=' -f 2
 
       - name: Build
-        uses: openwrt/gh-action-sdk@main
+        uses: apoiston/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
           FEEDNAME: nikki
           PACKAGES: luci-app-nikki
+          INDEX: 1
           NO_REFRESH_CHECK: true
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.PUBLIC_KEY }}
+          
+      - name: Compress
+        run: |
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz -C bin/packages/${{ matrix.arch }}/nikki .
+          mkdir -p public/${{ matrix.branch }}/${{ matrix.arch }}
+          mv bin/packages/${{ matrix.arch }}/nikki public/${{ matrix.branch }}/${{ matrix.arch }}
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz public/${{ matrix.branch }}/${{ matrix.arch }}
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@main
         with:
           name: nikki_${{ matrix.arch }}-${{ matrix.branch }}
-          path: bin/packages/${{ matrix.arch }}/nikki
+          path: nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz
+
+  feed:
+    needs: build
+    name: feed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download
+        uses: actions/download-artifact@main
+        with:
+          pattern: nikki_*
+          merge-multiple: true
+      
+      - name: Uncompress
+        run: |
+          for file in nikki_*.tar.gz; do tar -x -z -f "$file"; done
+
+      - name: Keys
+        run: |
+          echo "${{ secrets.KEY_BUILD_PUB }}" > public/key-build.pub
+          echo "${{ secrets.PUBLIC_KEY }}" > public/public-key.pem
+
+      - name: Index
+        uses: apoiston/actions@index
+
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+          fetch-depth: 1
+
+      - name: Rsync scripts
+        run: |
+          cp openwrt-nikki/feed.sh openwrt-nikki/install.sh openwrt-nikki/uninstall.sh public/ 
+
+      - name: Feed
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          force_orphan: true
+          commit_message: Update Feed
+
+  clean:
+    needs: feed
+    name: clean
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean pages
+        uses: apoiston/actions@clean
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 2
+  

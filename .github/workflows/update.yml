@@ -1,0 +1,216 @@
+name: Update Packages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22,1,4,7,10,13 * * *"
+
+jobs:
+  get_current_info:
+    runs-on: ubuntu-latest
+    outputs:
+      pkg_source_version: ${{ steps.get_current_info.outputs.pkg_source_version }}
+      pkg_mirror_hash: ${{ steps.get_current_info.outputs.pkg_mirror_hash }}
+      pkg_build_version: ${{ steps.get_current_info.outputs.pkg_build_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+
+      - name: Get Current Info
+        id: get_current_info
+        run: |
+          echo "pkg_source_version=$(grep "PKG_SOURCE_VERSION:=" openwrt-nikki/nikki/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_mirror_hash=$(grep "PKG_MIRROR_HASH:=" openwrt-nikki/nikki/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+          echo "pkg_build_version=$(grep "PKG_BUILD_VERSION:=" openwrt-nikki/nikki/Makefile | cut -d '=' -f 2)" >> $GITHUB_OUTPUT
+
+  get_lastest_info:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_date: ${{ steps.get_lastest_info.outputs.commit_date }}
+      commit_sha: ${{ steps.get_lastest_info.outputs.commit_sha }}
+      short_commit_sha: ${{ steps.get_lastest_info.outputs.short_commit_sha }}
+      checksum: ${{ steps.get_lastest_info.outputs.checksum }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: 'MetaCubeX/mihomo'
+          ref: 'Alpha'
+          path: 'mihomo'
+
+      - name: Get Latest Info
+        id: get_lastest_info
+        run: |
+          echo "commit_date=$(git -C mihomo log -n 1 --format=%cs)" >> $GITHUB_OUTPUT
+          echo "commit_sha=$(git -C mihomo rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "short_commit_sha=$(git -C mihomo rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          git -C mihomo config tar.xz.command "xz -c"
+          git -C mihomo archive --output=mihomo.tar.xz HEAD
+          echo "checksum=$(sha256sum mihomo/mihomo.tar.xz | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+
+  update:
+    needs:
+      - get_current_info
+      - get_lastest_info
+    if: ${{ needs.get_current_info.outputs.pkg_source_version != needs.get_lastest_info.outputs.commit_sha }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+
+      - name: Update
+        run: |
+          sed -i "s/PKG_RELEASE:=.*/PKG_RELEASE:=1/" openwrt-nikki/nikki/Makefile
+          sed -i "s/PKG_SOURCE_DATE:=.*/PKG_SOURCE_DATE:=${{ needs.get_lastest_info.outputs.commit_date }}/" openwrt-nikki/nikki/Makefile
+          sed -i "s/PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ needs.get_lastest_info.outputs.commit_sha }}/" openwrt-nikki/nikki/Makefile
+          sed -i "s/PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${{ needs.get_lastest_info.outputs.checksum }}/" openwrt-nikki/nikki/Makefile
+          sed -i "s/PKG_BUILD_VERSION:=.*/PKG_BUILD_VERSION:=alpha-${{ needs.get_lastest_info.outputs.short_commit_sha }}/" openwrt-nikki/nikki/Makefile
+
+      - name: Commit
+        working-directory: openwrt-nikki
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add nikki/Makefile
+          git commit -m "Update core"
+          git push origin main
+
+  build:
+    needs: update
+    if: ${{ needs.update.result == 'success' }}
+    name: ${{ matrix.arch }}-${{ matrix.branch }} build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86_64
+        branch:
+          - SNAPSHOT
+          - openwrt-24.10
+
+    steps:
+      - name: Set timezone
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date
+
+      - name: System info
+        run: |
+          lscpu | grep -E '^Architecture|^CPU\(s\):|^Model name'
+          uname -sr
+          lsb_release -a
+          free -h
+          
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+          fetch-depth: 1
+
+      - name: Show info
+        run: |
+          ls -l $GITHUB_WORKSPACE
+          grep -o 'PKG_BUILD_VERSION:.*' openwrt-nikki/nikki/Makefile | cut -d '=' -f 2
+
+      - name: Build
+        uses: apoiston/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
+          FEEDNAME: nikki
+          PACKAGES: luci-app-nikki
+          INDEX: 1
+          NO_REFRESH_CHECK: true
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.PUBLIC_KEY }}
+          
+      - name: Compress
+        run: |
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz -C bin/packages/${{ matrix.arch }}/nikki . 
+          mkdir -p public/${{ matrix.branch }}/${{ matrix.arch }}
+          mv bin/packages/${{ matrix.arch }}/nikki public/${{ matrix.branch }}/${{ matrix.arch }}
+          tar -c -z -f nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz public/${{ matrix.branch }}/${{ matrix.arch }}
+
+      - name: Upload
+        uses: actions/upload-artifact@main
+        with:
+          name: nikki_${{ matrix.arch }}-${{ matrix.branch }}
+          path: nikki_${{ matrix.arch }}-${{ matrix.branch }}.tar.gz
+
+  feed:
+    needs: build
+    name: feed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download
+        uses: actions/download-artifact@main
+        with:
+          pattern: nikki_*
+          merge-multiple: true
+      
+      - name: Uncompress
+        run: |
+          for file in nikki_*.tar.gz; do tar -x -z -f "$file"; done
+
+      - name: Keys
+        run: |
+          echo "${{ secrets.KEY_BUILD_PUB }}" > public/key-build.pub
+          echo "${{ secrets.PUBLIC_KEY }}" > public/public-key.pem
+
+      - name: Index
+        uses: apoiston/actions@index
+
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          repository: apoiston/openwrt-nikki
+          ref: main
+          path: openwrt-nikki
+          fetch-depth: 1
+
+      - name: Rsync scripts
+        run: |
+          cp openwrt-nikki/feed.sh openwrt-nikki/install.sh openwrt-nikki/uninstall.sh public/  
+
+      - name: Feed
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          force_orphan: true
+          commit_message: Update Feed
+
+  clean:
+    needs: feed
+    name: clean
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean pages
+        uses: apoiston/actions@clean
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 2
