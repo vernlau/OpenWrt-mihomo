@@ -1,0 +1,32 @@
+body {
+    background-color: #ffffff;
+    color: #d0d0d0;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    line-height: 1;
+}
+h2 {
+    color: #d0d0d0;
+}
+p {
+    color: #d0d0d0;
+}
+pre {
+    background-color: #ffffff;
+    border: 1px solid #d0d0d0;
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 14px;
+    overflow-x: auto;
+}
+code {
+    color: #000000;
+    font-family: "Courier New", Courier, monospace;
+    display: block;
+}
+#SNAPSHOT, #2410 {
+    text-align: left;
+    font-size: 16px;
+    margin-top: 10px;
+}
